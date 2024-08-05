@@ -8,6 +8,7 @@ import "./libraries/TWAPOrder.sol";
 import {IVestingEscrow} from "../../interfaces/IVestingEscrow.sol";
 import {VestingContextEncoder} from "./libraries/VestingContextEncoder.sol";
 import {SafeCast} from "@openzeppelin/contracts/utils/math/SafeCast.sol";
+import {VestingMathLib} from "./libraries/VestingMathLib.sol";
 
 // --- error strings
 
@@ -53,7 +54,11 @@ contract VestingTWAP is BaseConditionalOrder, VestingContextEncoder {
 
         uint256 endTime = data.vesting.end_time();
 
-        uint256 initialVestingLocked = _lockedAt(
+        if (orderCreationTime > endTime) {
+            revert IConditionalOrder.OrderNotValid(VESTING_END);
+        }
+
+        uint256 initialVestingLocked = VestingMathLib.lockedAt(
             block.timestamp,
             data.vesting.startTime(),
             endTime,
@@ -61,7 +66,16 @@ contract VestingTWAP is BaseConditionalOrder, VestingContextEncoder {
             data.vesting.cliffLength()
         );
 
-        uint256 period = _calculatePeriod(
+        if (
+            !VestingMathLib.verifyClaimAmount(
+                data.claimAmount,
+                initialVestingLocked
+            )
+        ) {
+            revert IConditionalOrder.OrderNotValid(INVALID_CLAIM_AMOUNT);
+        }
+
+        uint256 period = VestingMathLib.calculatePeriod(
             data.claimAmount,
             endTime,
             orderCreationTime,
@@ -86,47 +100,13 @@ contract VestingTWAP is BaseConditionalOrder, VestingContextEncoder {
         }
     }
 
-    function _lockedAt(
-        uint256 time,
-        uint256 startTime,
-        uint256 endTime,
-        uint256 totalLocked,
-        uint256 cliffLength
-    ) internal pure returns (uint256) {
-        if (time <= startTime + cliffLength) {
-            return totalLocked;
-        }
-        if (time >= endTime) {
-            return 0;
-        }
-        return (totalLocked * (endTime - time)) / (endTime - startTime);
-    }
-
-    function _calculatePeriod(
-        uint256 claimAmount,
-        uint256 endTime,
-        uint256 orderCreationTime,
-        uint256 initialVestingLocked
-    ) internal pure returns (uint256) {
-        return
-            (claimAmount * (endTime - orderCreationTime)) /
-            initialVestingLocked;
-    }
-
-    function _calculateBatchLenght(
-        uint256 claimAmount,
-        uint256 initialVestingLocked
-    ) internal pure returns (uint256) {
-        return initialVestingLocked / claimAmount;
-    }
-
     function _twapOrder(
         Data memory data,
         uint256 firstBatchValidFrom,
         uint256 period,
         uint256 initialVestingLocked
     ) internal view returns (GPv2Order.Data memory order) {
-        uint256 n = _calculateBatchLenght(
+        uint256 n = VestingMathLib.calculateBatchLenght(
             data.claimAmount,
             initialVestingLocked
         );
@@ -167,6 +147,13 @@ contract VestingTWAP is BaseConditionalOrder, VestingContextEncoder {
 
         if (firstBatchValidFrom > type(uint32).max) {
             revert IConditionalOrder.OrderNotValid(INVALID_START_TIME);
+        }
+
+        if (initialClaimAmount < data.claimAmount) {
+            revert IConditionalOrder.PollTryAtEpoch(
+                firstBatchValidFrom,
+                LOW_FIRST_BATCH
+            );
         }
 
         order = GPv2Order.Data({

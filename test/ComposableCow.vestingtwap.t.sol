@@ -83,7 +83,7 @@ contract ComposableCowVestingTWAPTest is Test {
         );
         vm.mockCall(
             address(vestingEscrow),
-            abi.encodeWithSelector(IVestingEscrow.end_time.selector),
+            abi.encodeWithSelector(IVestingEscrow.endTime.selector),
             abi.encode(endTime)
         );
         vm.mockCall(

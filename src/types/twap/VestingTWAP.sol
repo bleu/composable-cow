@@ -52,14 +52,14 @@ contract VestingTWAP is BaseConditionalOrder {
             uint256 initialClaimAmount
         ) = VestingContextEncoder.decode(composableCow.cabinet(owner, ctx));
 
-        uint256 endTime = data.vesting.end_time();
+        uint256 endTime = data.vesting.endTime();
 
         if (orderCreationTime > endTime) {
             revert IConditionalOrder.OrderNotValid(VESTING_END);
         }
 
         uint256 initialVestingLocked = VestingMathLib.lockedAt(
-            block.timestamp,
+            orderCreationTime,
             data.vesting.startTime(),
             endTime,
             data.vesting.totalLocked(),

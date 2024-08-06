@@ -5,7 +5,7 @@ import {Test} from "forge-std/Test.sol";
 import "../src/types/twap/VestingTWAP.sol";
 import {VestingContextEncoder} from "../src/types/twap/libraries/VestingContextEncoder.sol";
 
-contract ComposableCowVestingTWAPTest is Test, VestingContextEncoder {
+contract ComposableCowVestingTWAPTest is Test {
     using SafeCast for uint256;
 
     ComposableCoW composableCow;

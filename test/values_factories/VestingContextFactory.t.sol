@@ -1,15 +1,15 @@
 pragma solidity ^0.8.0;
 
 import "forge-std/Test.sol";
-import "../../src/types/twap/libraries/VestingContext.sol";
+import "../../src/value_factories/VestingContextFactory.sol";
 import "../../src/interfaces/IVestingEscrow.sol";
 
-contract VestingContextTest is Test {
-    VestingContext public vestingContext;
+contract VestingContexFactoryTest is Test {
+    VestingContextFactory public vestingContextFactory;
     IVestingEscrow public vestingEscrow;
 
     function setUp() public {
-        vestingContext = new VestingContext();
+        vestingContextFactory = new VestingContextFactory();
     }
 
     function test_BytesToAddress_concrete() public {
@@ -17,7 +17,7 @@ contract VestingContextTest is Test {
             0x1234567890123456789012345678901234567890
         );
         bytes memory addressBytes = abi.encodePacked(testAddress);
-        address result = vestingContext.bytesToAddress(addressBytes);
+        address result = vestingContextFactory.bytesToAddress(addressBytes);
         assertEq(result, testAddress, "bytesToAddress conversion failed");
     }
 
@@ -30,10 +30,12 @@ contract VestingContextTest is Test {
         );
 
         bytes memory addressBytes = abi.encodePacked(address(vestingEscrow));
-        bytes32 result = vestingContext.getValue(addressBytes);
+        bytes32 result = vestingContextFactory.getValue(addressBytes);
 
-        (uint256 timestampResult, uint256 unclaimedResult) = vestingContext
-            .decode(result);
+        (
+            uint256 timestampResult,
+            uint256 unclaimedResult
+        ) = VestingContextEncoder.decode(result);
 
         assertEq(timestampResult, block.timestamp, "Timestamp mismatch");
         assertEq(unclaimedValue, unclaimedResult, "Unclaimed value mismatch");
@@ -49,7 +51,7 @@ contract VestingContextTest is Test {
 
         bytes memory addressBytes = abi.encodePacked(address(vestingEscrow));
         vm.expectRevert("Value too large");
-        vestingContext.getValue(addressBytes);
+        vestingContextFactory.getValue(addressBytes);
     }
 
     function test_FuzzGetValue_fuzz(
@@ -64,10 +66,12 @@ contract VestingContextTest is Test {
         vm.warp(timestampValue);
 
         bytes memory addressBytes = abi.encodePacked(address(vestingEscrow));
-        bytes32 result = vestingContext.getValue(addressBytes);
+        bytes32 result = vestingContextFactory.getValue(addressBytes);
 
-        (uint256 timestampResult, uint256 unclaimedResult) = vestingContext
-            .decode(result);
+        (
+            uint256 timestampResult,
+            uint256 unclaimedResult
+        ) = VestingContextEncoder.decode(result);
 
         assertEq(timestampResult, timestampValue, "Fuxx: Timestamp mismatch");
         assertEq(
@@ -87,6 +91,6 @@ contract VestingContextTest is Test {
 
         bytes memory addressBytes = abi.encodePacked(address(vestingEscrow));
         vm.expectRevert("Value too large");
-        vestingContext.getValue(addressBytes);
+        vestingContextFactory.getValue(addressBytes);
     }
 }

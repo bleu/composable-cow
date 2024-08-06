@@ -1,10 +1,10 @@
 // SPDX-License-Identifier: GPL-3.0
 pragma solidity ^0.8.0;
 
-import {IVestingEscrow} from "../../../interfaces/IVestingEscrow.sol";
-import {VestingContextEncoder} from "./VestingContextEncoder.sol";
+import {IVestingEscrow} from "../interfaces/IVestingEscrow.sol";
+import {VestingContextEncoder} from "../types/twap/libraries/VestingContextEncoder.sol";
 
-contract VestingContext is VestingContextEncoder {
+contract VestingContextFactory {
     uint256 private constant _TIMESTAMP_BITS = 40;
     uint256 private constant _VALUE_BITS = 104;
 

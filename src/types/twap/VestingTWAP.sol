@@ -17,7 +17,7 @@ string constant VESTING_END = "vesting end";
 string constant LOW_FIRST_BATCH = "low first batch";
 string constant INVALID_CLAIM_AMOUNT = "invalid claim amount";
 
-contract VestingTWAP is BaseConditionalOrder, VestingContextEncoder {
+contract VestingTWAP is BaseConditionalOrder {
     using SafeCast for uint256;
 
     ComposableCoW public immutable composableCow;

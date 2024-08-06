@@ -6,16 +6,10 @@ import "../../src/types/twap/libraries/VestingContextEncoder.sol";
 import "../../src/interfaces/IVestingEscrow.sol";
 
 contract VestingContextEncoderTest is Test {
-    VestingContextEncoder public encoder;
-
-    function setUp() public {
-        encoder = new VestingContextEncoder();
-    }
-
     function test_Encode_concrete() public {
         uint256 timestamp = 1234567890; // Example timestamp
         uint256 value = 1 ether; // Example value
-        bytes32 encoded = encoder.encode(timestamp, value);
+        bytes32 encoded = VestingContextEncoder.encode(timestamp, value);
 
         assertEq(
             uint256(encoded) & ((1 << 40) - 1),
@@ -28,11 +22,10 @@ contract VestingContextEncoderTest is Test {
     function test_Decode_concrete() public {
         uint256 timestamp = 1234567890;
         uint256 value = 1 ether;
-        bytes32 encoded = encoder.encode(timestamp, value);
+        bytes32 encoded = VestingContextEncoder.encode(timestamp, value);
 
-        (uint256 decodedTimestamp, uint256 decodedValue) = encoder.decode(
-            encoded
-        );
+        (uint256 decodedTimestamp, uint256 decodedValue) = VestingContextEncoder
+            .decode(encoded);
 
         assertEq(decodedTimestamp, timestamp, "Timestamp decoding failed");
         assertEq(decodedValue, value, "Value decoding failed");
@@ -41,11 +34,10 @@ contract VestingContextEncoderTest is Test {
     function test_EncodeMaxValue_concrete() public {
         uint256 maxTimestamp = (1 << 40) - 1;
         uint256 maxValue = (1 << 216) - 1;
-        bytes32 encoded = encoder.encode(maxTimestamp, maxValue);
+        bytes32 encoded = VestingContextEncoder.encode(maxTimestamp, maxValue);
 
-        (uint256 decodedTimestamp, uint256 decodedValue) = encoder.decode(
-            encoded
-        );
+        (uint256 decodedTimestamp, uint256 decodedValue) = VestingContextEncoder
+            .decode(encoded);
 
         assertEq(
             decodedTimestamp,
@@ -60,7 +52,7 @@ contract VestingContextEncoderTest is Test {
         uint256 value = 1 ether;
 
         vm.expectRevert("Timestamp too large");
-        encoder.encode(tooLargeTimestamp, value);
+        VestingContextEncoder.encode(tooLargeTimestamp, value);
     }
 
     function test_FailOnEncodeValueTooLarge_concrete() public {
@@ -68,14 +60,13 @@ contract VestingContextEncoderTest is Test {
         uint256 tooLargeValue = 1 << 216;
 
         vm.expectRevert("Value too large");
-        encoder.encode(timestamp, tooLargeValue);
+        VestingContextEncoder.encode(timestamp, tooLargeValue);
     }
 
     function test_EncodeDecode_fuzz(uint40 timestamp, uint216 value) public {
-        bytes32 encoded = encoder.encode(timestamp, value);
-        (uint256 decodedTimestamp, uint256 decodedValue) = encoder.decode(
-            encoded
-        );
+        bytes32 encoded = VestingContextEncoder.encode(timestamp, value);
+        (uint256 decodedTimestamp, uint256 decodedValue) = VestingContextEncoder
+            .decode(encoded);
         assertEq(
             decodedTimestamp,
             timestamp,
@@ -89,7 +80,7 @@ contract VestingContextEncoderTest is Test {
         uint256 value = 1 ether;
 
         vm.expectRevert("Timestamp too large");
-        encoder.encode(timestamp, value);
+        VestingContextEncoder.encode(timestamp, value);
     }
 
     function test_EncodeValueTooLarge_fuzz(uint256 value) public {
@@ -97,6 +88,6 @@ contract VestingContextEncoderTest is Test {
         uint256 timestamp = 1234567890;
 
         vm.expectRevert("Value too large");
-        encoder.encode(timestamp, value);
+        VestingContextEncoder.encode(timestamp, value);
     }
 }

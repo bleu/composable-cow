@@ -4,7 +4,7 @@ pragma solidity ^0.8.0;
 string constant TIMESTAMP_TOO_LARGE = "Timestamp too large";
 string constant VALUE_TOO_LARGE = "Value too large";
 
-contract VestingContextEncoder {
+library VestingContextEncoder {
     uint256 private constant _TIMESTAMP_BITS = 40;
     uint256 private constant _VALUE_BITS = 216; // Increased to use all remaining bits
 

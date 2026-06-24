@@ -11,7 +11,9 @@ import {
     INVALID_HASH,
     BaseComposableCoWTest,
     Safe,
-    TestNonSafeWallet
+    TestNonSafeWallet,
+    TestSwapGuard,
+    ISwapGuard
 } from "./ComposableCoW.base.t.sol";
 
 contract ComposableCoWTest is BaseComposableCoWTest {
@@ -477,5 +479,59 @@ contract ComposableCoWTest is BaseComposableCoWTest {
             nonSafe.isValidSignature(GPv2Order.hash(order, composableCow.domainSeparator()), signature),
             ERC1271.isValidSignature.selector
         );
+    }
+
+    // --- combined `getOrderInfo` accessor ---
+
+    /// @dev After `create()`, `getOrderInfo` returns the params hash, `authorized = true`,
+    /// the (zero) cabinet value, and the (unset) swap guard.
+    function test_getOrderInfo_after_create_returns_all_fields() public {
+        IConditionalOrder.ConditionalOrderParams memory params = getPassthroughOrder();
+        bytes32 expectedHash = composableCow.hash(params);
+        address owner = address(safe1);
+
+        _create(owner, params, false);
+
+        ComposableCoW.OrderInfo memory info = composableCow.getOrderInfo(owner, params);
+
+        assertEq(info.hash, expectedHash, "hash mismatch");
+        assertTrue(info.authorized, "expected authorized = true");
+        assertEq(info.cabinetValue, bytes32(0), "expected zero cabinet for plain create");
+        assertEq(address(info.swapGuard), address(0), "expected unset swap guard");
+    }
+
+    /// @dev For an owner that never authorised the params, all relevant fields are inert
+    /// defaults (no revert).
+    function test_getOrderInfo_for_unauthorized_owner_returns_inert_defaults() public {
+        IConditionalOrder.ConditionalOrderParams memory params = getPassthroughOrder();
+        address owner = address(safe1);
+
+        // Note: NOT authorising the order here.
+        ComposableCoW.OrderInfo memory info = composableCow.getOrderInfo(owner, params);
+
+        // hash is deterministic over params alone; the rest must be zero / unset.
+        assertEq(info.hash, composableCow.hash(params), "hash should match");
+        assertTrue(!info.authorized, "expected authorized = false");
+        assertEq(info.cabinetValue, bytes32(0), "expected zero cabinet");
+        assertEq(address(info.swapGuard), address(0), "expected unset swap guard");
+    }
+
+    /// @dev When the owner has set a swap guard, `getOrderInfo` surfaces its address.
+    function test_getOrderInfo_with_swap_guard_set_returns_guard_address() public {
+        IConditionalOrder.ConditionalOrderParams memory params = getPassthroughOrder();
+        address owner = address(safe1);
+
+        // Authorise the order so `authorized` is also non-default.
+        _create(owner, params, false);
+
+        // Set a swap guard for the owner.
+        TestSwapGuard guard = new TestSwapGuard(2);
+        _setSwapGuard(owner, ISwapGuard(address(guard)));
+
+        ComposableCoW.OrderInfo memory info = composableCow.getOrderInfo(owner, params);
+
+        assertEq(info.hash, composableCow.hash(params), "hash should match");
+        assertTrue(info.authorized, "expected authorized = true");
+        assertEq(address(info.swapGuard), address(guard), "expected guard address");
     }
 }

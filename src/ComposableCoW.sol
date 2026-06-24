@@ -44,6 +44,18 @@ contract ComposableCoW is ISafeSignatureVerifier {
         bytes data;
     }
 
+    // Combined accessor for the metadata a watch tower needs per watch.
+
+    /// @dev Single-call view of the per-watch metadata. Returns inert defaults for fields
+    ///      that don't apply to the given owner / params combination (e.g.
+    ///      `swapGuard == ISwapGuard(address(0))` when no guard is set).
+    struct OrderInfo {
+        bytes32 hash; // H(params) — the same value `_auth` would derive
+        bool authorized; // `singleOrders[owner][hash]` — meaningful only when not using a merkle proof
+        bytes32 cabinetValue; // `cabinet[owner][hash]`
+        ISwapGuard swapGuard; // `swapGuards[owner]`
+    }
+
     // --- events
 
     // An event emitted when a user sets their merkle root
@@ -276,6 +288,33 @@ contract ComposableCoW is ISafeSignatureVerifier {
      */
     function hash(IConditionalOrder.ConditionalOrderParams memory params) public pure returns (bytes32) {
         return keccak256(abi.encode(params));
+    }
+
+    /**
+     * @notice Single-call accessor returning the metadata a watch tower needs per watch:
+     *         the params hash, the single-order authorisation flag, the cabinet value (if
+     *         any), and the owner's swap guard. Combines what would otherwise be 3-4
+     *         separate `eth_call`s (`hash()`, `singleOrders`, `cabinet`, `swapGuards`) into
+     *         one round trip.
+     *
+     *         Returns inert defaults for fields that don't apply to the given owner /
+     *         params combination — e.g. `authorized == false` when not authorised,
+     *         `cabinetValue == bytes32(0)` when no cabinet slot is set,
+     *         `swapGuard == ISwapGuard(address(0))` when no guard is set.
+     *
+     * @param owner The owner of the conditional order.
+     * @param params The `ConditionalOrderParams` identifying the order.
+     * @return info The combined per-watch metadata.
+     */
+    function getOrderInfo(address owner, IConditionalOrder.ConditionalOrderParams calldata params)
+        external
+        view
+        returns (OrderInfo memory info)
+    {
+        info.hash = hash(params);
+        info.authorized = singleOrders[owner][info.hash];
+        info.cabinetValue = cabinet[owner][info.hash];
+        info.swapGuard = swapGuards[owner];
     }
 
     // --- internal functions

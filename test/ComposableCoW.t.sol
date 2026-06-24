@@ -478,4 +478,61 @@ contract ComposableCoWTest is BaseComposableCoWTest {
             ERC1271.isValidSignature.selector
         );
     }
+
+    // --- additive `ConditionalOrderRegistered` event ---
+
+    // Re-declared here so `vm.expectEmit` can match it; `ComposableCoW.sol` defines the
+    // canonical signature.
+    event ConditionalOrderRegistered(
+        address indexed owner,
+        address indexed handler,
+        bytes32 indexed ctx,
+        IConditionalOrder.ConditionalOrderParams params
+    );
+
+    /// @dev `create()` emits BOTH events. The existing `ConditionalOrderCreated` is emitted
+    /// first (preserving its topic-0 order in receipts), then the new
+    /// `ConditionalOrderRegistered` with `owner`/`handler`/`ctx` indexed.
+    function test_create_emits_both_events_with_indexed_topics() public {
+        IConditionalOrder.ConditionalOrderParams memory params = getPassthroughOrder();
+        bytes32 expectedCtx = composableCow.hash(params);
+        address owner = address(safe1);
+
+        // First: existing event (signature unchanged).
+        vm.expectEmit(true, true, true, true);
+        emit ConditionalOrderCreated(owner, params);
+        // Second: new additive event with handler & ctx indexed.
+        vm.expectEmit(true, true, true, true);
+        emit ConditionalOrderRegistered(owner, address(params.handler), expectedCtx, params);
+
+        vm.prank(owner);
+        composableCow.create(params, true);
+    }
+
+    /// @dev `createWithContext()` also emits both events (it delegates to `create()`).
+    function test_createWithContext_emits_both_events() public {
+        IConditionalOrder.ConditionalOrderParams memory params = getPassthroughOrder();
+        bytes32 expectedCtx = composableCow.hash(params);
+        address owner = address(safe1);
+        bytes memory data = abi.encode(bytes32("ctxVal"));
+
+        vm.expectEmit(true, true, true, true);
+        emit ConditionalOrderCreated(owner, params);
+        vm.expectEmit(true, true, true, true);
+        emit ConditionalOrderRegistered(owner, address(params.handler), expectedCtx, params);
+
+        vm.prank(owner);
+        composableCow.createWithContext(params, testContextValue, data, true);
+    }
+
+    /// @dev Regression: the existing `ConditionalOrderCreated` event signature MUST NOT
+    /// change — its topic-0 hash is the keying value for every downstream indexer.
+    /// Pin the hash so any accidental signature edit fails the build.
+    function test_existing_ConditionalOrderCreated_signature_unchanged() public {
+        // Canonical signature per `IConditionalOrderGenerator` and `ComposableCoW`:
+        //   ConditionalOrderCreated(address,(address,bytes32,bytes))
+        bytes32 expectedTopic0 = keccak256("ConditionalOrderCreated(address,(address,bytes32,bytes))");
+        bytes32 actualTopic0 = ConditionalOrderCreated.selector;
+        assertEq(actualTopic0, expectedTopic0, "ConditionalOrderCreated topic-0 hash drifted");
+    }
 }

@@ -49,6 +49,19 @@ contract ComposableCoW is ISafeSignatureVerifier {
     // An event emitted when a user sets their merkle root
     event MerkleRootSet(address indexed owner, bytes32 root, Proof proof);
     event ConditionalOrderCreated(address indexed owner, IConditionalOrder.ConditionalOrderParams params);
+    /// @dev Additive companion to `ConditionalOrderCreated`. Provides indexed `handler` and
+    ///      `ctx` (`= hash(params)`) for watch tower / indexer filtering at the RPC level
+    ///      (`eth_subscribe logs` can pass `topics: [hash, null, handlerAddr]` directly).
+    ///      Emitted alongside `ConditionalOrderCreated` in `create()` and
+    ///      `createWithContext()` whenever `dispatch == true`. The existing
+    ///      `ConditionalOrderCreated` signature is intentionally untouched so indexers
+    ///      keyed on its topic-0 hash continue to work.
+    event ConditionalOrderRegistered(
+        address indexed owner,
+        address indexed handler,
+        bytes32 indexed ctx,
+        IConditionalOrder.ConditionalOrderParams params
+    );
     event SwapGuardSet(address indexed owner, ISwapGuard swapGuard);
 
     // --- state
@@ -114,9 +127,14 @@ contract ComposableCoW is ISafeSignatureVerifier {
             revert InvalidHandler();
         }
 
-        singleOrders[msg.sender][hash(params)] = true;
+        bytes32 ctx = hash(params);
+        singleOrders[msg.sender][ctx] = true;
         if (dispatch) {
             emit ConditionalOrderCreated(msg.sender, params);
+            // additive companion event with `handler` and `ctx` indexed for
+            // RPC-level filtering. The existing `ConditionalOrderCreated` event is
+            // untouched (its topic-0 hash MUST NOT change — indexers depend on it).
+            emit ConditionalOrderRegistered(msg.sender, address(params.handler), ctx, params);
         }
     }
 

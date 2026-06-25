@@ -478,4 +478,113 @@ contract ComposableCoWTest is BaseComposableCoWTest {
             ERC1271.isValidSignature.selector
         );
     }
+
+    // --- batched getter ---
+
+    /// @dev Helper: build a `BatchOrderRequest` for the pass-through handler.
+    function _buildPassthroughRequest(address owner, bytes32 salt)
+        internal
+        returns (ComposableCoW.BatchOrderRequest memory req)
+    {
+        IConditionalOrder.ConditionalOrderParams memory params = createOrder(passThrough, salt, bytes(""));
+        _create(owner, params, false);
+        req = ComposableCoW.BatchOrderRequest({
+            owner: owner,
+            params: params,
+            offchainInput: abi.encode(getBlankOrder()),
+            proof: new bytes32[](0)
+        });
+    }
+
+    /// @dev All requests in the batch succeed; results are returned in input order with
+    /// `success = true` and `revertData == ""`.
+    function test_batchGetTradeableOrdersWithSignature_all_success() public {
+        ComposableCoW.BatchOrderRequest[] memory reqs = new ComposableCoW.BatchOrderRequest[](3);
+        reqs[0] = _buildPassthroughRequest(address(safe1), keccak256("batch-0"));
+        reqs[1] = _buildPassthroughRequest(address(safe1), keccak256("batch-1"));
+        reqs[2] = _buildPassthroughRequest(address(safe1), keccak256("batch-2"));
+
+        ComposableCoW.BatchOrderResult[] memory results = composableCow.batchGetTradeableOrdersWithSignature(reqs);
+
+        // The pass-through handler returns whatever `offchainInput` decodes to, so the
+        // order matches the blank order we encoded.
+        GPv2Order.Data memory expectedOrder = getBlankOrder();
+
+        assertEq(results.length, 3, "length mismatch");
+        for (uint256 i = 0; i < results.length; ++i) {
+            assertTrue(results[i].success, "expected success");
+            assertEq(results[i].revertData.length, 0, "expected empty revertData on success");
+            // Sanity-check the order survives the round trip — appData is the only
+            // distinguishing field on the blank order, so check it.
+            assertEq(results[i].order.appData, expectedOrder.appData, "appData mismatch");
+            // signature should be non-empty
+            assertGt(results[i].signature.length, 0, "expected non-empty signature");
+        }
+    }
+
+    /// @dev Mixed: one request succeeds, one reverts. The failed request returns
+    /// `success = false` and the raw revert payload; the successful one is unaffected.
+    function test_batchGetTradeableOrdersWithSignature_mixed_success_and_revert() public {
+        // Request 0 is authorised → should succeed.
+        ComposableCoW.BatchOrderRequest memory req0 = _buildPassthroughRequest(address(safe1), keccak256("mixed-0"));
+
+        // Request 1 uses params that were NEVER authorised → should revert with
+        // `SingleOrderNotAuthed` (this is the canonical revert path that watch towers see
+        // when polling a watch whose authorisation was revoked).
+        IConditionalOrder.ConditionalOrderParams memory unauthedParams =
+            createOrder(passThrough, keccak256("mixed-1-unauthed"), bytes(""));
+
+        ComposableCoW.BatchOrderRequest[] memory reqs = new ComposableCoW.BatchOrderRequest[](2);
+        reqs[0] = req0;
+        reqs[1] = ComposableCoW.BatchOrderRequest({
+            owner: address(safe1),
+            params: unauthedParams,
+            offchainInput: abi.encode(getBlankOrder()),
+            proof: new bytes32[](0)
+        });
+
+        ComposableCoW.BatchOrderResult[] memory results = composableCow.batchGetTradeableOrdersWithSignature(reqs);
+
+        assertEq(results.length, 2, "length mismatch");
+        assertTrue(results[0].success, "req0 should succeed");
+        assertEq(results[0].revertData.length, 0, "req0 should have empty revertData");
+
+        assertTrue(!results[1].success, "req1 should fail");
+        assertGt(results[1].revertData.length, 0, "req1 should carry revertData");
+    }
+
+    /// @dev `revertData` carries the raw revert payload (selector + args) so the caller
+    /// can decode it — this is what lets a watch tower act on `PollTryAtEpoch` /
+    /// `PollNever` / `SingleOrderNotAuthed` returned from a batched call.
+    function test_batchGetTradeableOrdersWithSignature_preserves_revert_data() public {
+        // Unauthorised → `SingleOrderNotAuthed` (selector-only, no args).
+        IConditionalOrder.ConditionalOrderParams memory unauthedParams =
+            createOrder(passThrough, keccak256("preserves-revert"), bytes(""));
+
+        ComposableCoW.BatchOrderRequest[] memory reqs = new ComposableCoW.BatchOrderRequest[](1);
+        reqs[0] = ComposableCoW.BatchOrderRequest({
+            owner: address(safe1),
+            params: unauthedParams,
+            offchainInput: abi.encode(getBlankOrder()),
+            proof: new bytes32[](0)
+        });
+
+        ComposableCoW.BatchOrderResult[] memory results = composableCow.batchGetTradeableOrdersWithSignature(reqs);
+
+        assertTrue(!results[0].success, "expected failure");
+        // Selector is the first 4 bytes of `revertData`. Reconstruct it.
+        bytes memory rd = results[0].revertData;
+        bytes4 selector;
+        assembly {
+            selector := mload(add(rd, 32))
+        }
+        assertEq(selector, ComposableCoW.SingleOrderNotAuthed.selector, "selector mismatch");
+    }
+
+    /// @dev Empty input → empty output, no revert.
+    function test_batchGetTradeableOrdersWithSignature_empty_input() public {
+        ComposableCoW.BatchOrderRequest[] memory reqs = new ComposableCoW.BatchOrderRequest[](0);
+        ComposableCoW.BatchOrderResult[] memory results = composableCow.batchGetTradeableOrdersWithSignature(reqs);
+        assertEq(results.length, 0, "expected empty array");
+    }
 }

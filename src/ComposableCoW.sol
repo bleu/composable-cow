@@ -44,6 +44,30 @@ contract ComposableCoW is ISafeSignatureVerifier {
         bytes data;
     }
 
+    // Batched lookups for watch towers polling many watches on the same chain.
+
+    /// @dev One request inside a `batchGetTradeableOrdersWithSignature` call. Mirrors the
+    ///      argument list of `getTradeableOrderWithSignature` 1:1.
+    struct BatchOrderRequest {
+        address owner;
+        IConditionalOrder.ConditionalOrderParams params;
+        bytes offchainInput;
+        bytes32[] proof;
+    }
+
+    /// @dev One result inside a `batchGetTradeableOrdersWithSignature` call. On success,
+    ///      `order` and `signature` carry the payload; `revertData` is empty bytes. On
+    ///      failure, `success == false` and `revertData` carries the raw revert payload
+    ///      (selector + ABI-encoded args) so the caller can decode polling hints like
+    ///      `PollTryAtEpoch` / `PollNever`. Per-request try/catch isolation: one failed
+    ///      request never blocks the rest of the batch.
+    struct BatchOrderResult {
+        bool success;
+        GPv2Order.Data order;
+        bytes signature;
+        bytes revertData;
+    }
+
     // --- events
 
     // An event emitted when a user sets their merkle root
@@ -264,6 +288,41 @@ contract ComposableCoW is ISafeSignatureVerifier {
             // Assume that this is the EIP-1271 Forwarder (which does not have a `NAME` function)
             // The default signature is the abi.encode of the tuple (order, payload)
             signature = abi.encode(order, PayloadStruct({params: params, offchainInput: offchainInput, proof: proof}));
+        }
+    }
+
+    /**
+     * @notice Batched variant of `getTradeableOrderWithSignature`. Per-request try/catch
+     *         isolates failures: a failed request returns `success = false` with the raw
+     *         revert payload in `revertData`; other requests in the batch are unaffected.
+     *
+     *         Saves up to N-1 RPC round trips for watch towers polling N watches on the
+     *         same chain (Shepherd, the CoW DAO WatchTower, indexers' liveness probes).
+     *         The external self-call (`this.getTradeableOrderWithSignature(...)`) is what
+     *         gives us isolation — a direct internal call would bubble the revert and abort
+     *         the whole batch.
+     *
+     * @param requests Array of `BatchOrderRequest` mirroring `getTradeableOrderWithSignature`.
+     * @return results Array of `BatchOrderResult`, same length and order as `requests`.
+     */
+    function batchGetTradeableOrdersWithSignature(BatchOrderRequest[] calldata requests)
+        external
+        view
+        returns (BatchOrderResult[] memory results)
+    {
+        results = new BatchOrderResult[](requests.length);
+        for (uint256 i = 0; i < requests.length; ++i) {
+            try this.getTradeableOrderWithSignature(
+                requests[i].owner, requests[i].params, requests[i].offchainInput, requests[i].proof
+            ) returns (GPv2Order.Data memory order, bytes memory signature) {
+                results[i] = BatchOrderResult({success: true, order: order, signature: signature, revertData: ""});
+            } catch (bytes memory revertData) {
+                // Leave `order` and `signature` at their zero defaults — caller checks
+                // `success` first. Empty `order` / empty `signature` are still safe to
+                // ABI-decode (they just contain zeros).
+                results[i].success = false;
+                results[i].revertData = revertData;
+            }
         }
     }
 

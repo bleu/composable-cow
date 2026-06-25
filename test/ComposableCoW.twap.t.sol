@@ -16,7 +16,7 @@ import {
     BaseComposableCoWTest
 } from "./ComposableCoW.base.t.sol";
 
-import {TWAP, NOT_WITHIN_SPAN} from "../src/types/twap/TWAP.sol";
+import {TWAP, NOT_WITHIN_SPAN, BEFORE_FIRST_PART, ALL_PARTS_SETTLED, BETWEEN_PARTS} from "../src/types/twap/TWAP.sol";
 import {
     TWAPOrder,
     INVALID_SAME_TOKEN,
@@ -197,7 +197,9 @@ contract ComposableCoWTwapTest is BaseComposableCoWTest {
         // Warp to current time
         vm.warp(currentTime);
 
-        vm.expectRevert(abi.encodeWithSelector(IConditionalOrder.OrderNotValid.selector, BEFORE_TWAP_START));
+        // before `t0` now surfaces as `PollTryAtEpoch(t0, BEFORE_FIRST_PART)` so watch
+        // towers know exactly when to retry instead of seeing a generic `OrderNotValid`.
+        vm.expectRevert(abi.encodeWithSelector(IConditionalOrder.PollTryAtEpoch.selector, startTime, BEFORE_FIRST_PART));
         twap.getTradeableOrder(address(0), address(0), bytes32(0), abi.encode(o), bytes(""));
     }
 
@@ -223,7 +225,9 @@ contract ComposableCoWTwapTest is BaseComposableCoWTest {
         // Warp to expiry
         vm.warp(currentTime);
 
-        vm.expectRevert(abi.encodeWithSelector(IConditionalOrder.OrderNotValid.selector, AFTER_TWAP_FINISH));
+        // post total span now surfaces as `PollNever(ALL_PARTS_SETTLED)` so watch
+        // towers can drop this watch entirely instead of polling forever.
+        vm.expectRevert(abi.encodeWithSelector(IConditionalOrder.PollNever.selector, ALL_PARTS_SETTLED));
         twap.getTradeableOrder(address(0), address(0), bytes32(0), abi.encode(o), bytes(""));
     }
 
@@ -251,7 +255,11 @@ contract ComposableCoWTwapTest is BaseComposableCoWTest {
         // Warp to outside of the span
         vm.warp(currentTime);
 
-        vm.expectRevert(abi.encodeWithSelector(IConditionalOrder.OrderNotValid.selector, NOT_WITHIN_SPAN));
+        // between parts of an in-progress TWAP now surfaces as
+        // `PollTryAtEpoch(nextPartStart, BETWEEN_PARTS)` so watch towers can skip the
+        // dead time between parts instead of polling every block.
+        uint256 nextPartStart = startTime + (((currentTime - startTime) / FREQUENCY) + 1) * FREQUENCY;
+        vm.expectRevert(abi.encodeWithSelector(IConditionalOrder.PollTryAtEpoch.selector, nextPartStart, BETWEEN_PARTS));
         twap.getTradeableOrder(address(0), address(0), bytes32(0), abi.encode(o), bytes(""));
     }
 
@@ -279,8 +287,11 @@ contract ComposableCoWTwapTest is BaseComposableCoWTest {
         // Warp to the current time
         vm.warp(currentTime);
 
-        // The below should revert
-        vm.expectRevert(abi.encodeWithSelector(IConditionalOrder.OrderNotValid.selector, BEFORE_TWAP_START));
+        // before `t0` (here pinned to `ctxBlockTimestamp` via the value factory)
+        // surfaces as `PollTryAtEpoch(t0, BEFORE_FIRST_PART)`.
+        vm.expectRevert(
+            abi.encodeWithSelector(IConditionalOrder.PollTryAtEpoch.selector, ctxBlockTimestamp, BEFORE_FIRST_PART)
+        );
         composableCow.getTradeableOrderWithSignature(address(safe1), params, bytes(""), new bytes32[](0));
     }
 
@@ -308,8 +319,8 @@ contract ComposableCoWTwapTest is BaseComposableCoWTest {
         // Warp to the current time
         vm.warp(currentTime);
 
-        // The below should revert
-        vm.expectRevert(abi.encodeWithSelector(IConditionalOrder.OrderNotValid.selector, AFTER_TWAP_FINISH));
+        // post total span now surfaces as `PollNever(ALL_PARTS_SETTLED)`.
+        vm.expectRevert(abi.encodeWithSelector(IConditionalOrder.PollNever.selector, ALL_PARTS_SETTLED));
         composableCow.getTradeableOrderWithSignature(address(safe1), params, bytes(""), new bytes32[](0));
     }
 
@@ -518,16 +529,24 @@ contract ComposableCoWTwapTest is BaseComposableCoWTest {
             } catch (bytes memory lowLevelData) {
                 bytes4 receivedSelector = bytes4(lowLevelData);
 
-                // Should have reverted if the `numSecsProcessed` > `frequency * numParts`
-                if (block.timestamp == endTime && receivedSelector == IConditionalOrder.OrderNotValid.selector) {
+                // end-of-TWAP now surfaces as `PollNever` instead of `OrderNotValid`.
+                // Between-parts (only possible when `span > 0`) surfaces as `PollTryAtEpoch`.
+                if (block.timestamp == endTime && receivedSelector == IConditionalOrder.PollNever.selector) {
                     break;
                 } else if (block.timestamp > endTime) {
-                    revert("OrderNotValid() should have been thrown");
+                    revert("PollNever() should have been thrown");
                 }
 
-                // The order should always be valid because there is no span
-                if (span == 0 && receivedSelector == IConditionalOrder.OrderNotValid.selector) {
-                    revert("OrderNotValid() should not be thrown");
+                // For `span == 0` there is no between-parts gap, so a `PollTryAtEpoch` is a
+                // bug. Any `OrderNotValid` should be impossible for in-window TWAP.
+                if (
+                    span == 0
+                        && (
+                            receivedSelector == IConditionalOrder.OrderNotValid.selector
+                                || receivedSelector == IConditionalOrder.PollTryAtEpoch.selector
+                        )
+                ) {
+                    revert("no between-parts gap expected for span==0");
                 }
             }
             vm.warp(block.timestamp + 1 seconds);
@@ -623,6 +642,76 @@ contract ComposableCoWTwapTest is BaseComposableCoWTest {
         assertTrue(validTo >= currentTime);
         // `validTo` MUST be equal to this.
         assertTrue(validTo == expectedValidTo);
+    }
+
+    // --- TWAP polling hints ---
+
+    /// @dev Before `t0`, reverts with `PollTryAtEpoch(t0, "before first part")` so a watch
+    /// tower knows the exact retry timestamp rather than seeing a generic `OrderNotValid`.
+    function test_twap_reverts_with_PollTryAtEpoch_before_t0() public {
+        uint256 startTime = block.timestamp + 1 days;
+        TWAPOrder.Data memory o = _twapTestBundle(startTime);
+
+        // Sit at a timestamp strictly before `t0`.
+        vm.warp(startTime - 1);
+
+        vm.expectRevert(abi.encodeWithSelector(IConditionalOrder.PollTryAtEpoch.selector, startTime, BEFORE_FIRST_PART));
+        twap.getTradeableOrder(address(0), address(0), bytes32(0), abi.encode(o), bytes(""));
+    }
+
+    /// @dev After every part has been settled (current time >= t0 + n*t), reverts with
+    /// `PollNever("all parts settled")` so a watch tower can drop this watch entirely.
+    function test_twap_reverts_with_PollNever_after_total_span() public {
+        uint256 startTime = 1_000_000;
+        TWAPOrder.Data memory o = _twapTestBundle(startTime);
+
+        // Sit at the first timestamp where every part has finished. Per spec, the end
+        // timestamp is exclusive — `block.timestamp == t0 + n*t` is already done.
+        vm.warp(startTime + uint256(FREQUENCY) * uint256(NUM_PARTS));
+
+        vm.expectRevert(abi.encodeWithSelector(IConditionalOrder.PollNever.selector, ALL_PARTS_SETTLED));
+        twap.getTradeableOrder(address(0), address(0), bytes32(0), abi.encode(o), bytes(""));
+    }
+
+    /// @dev Between parts of an in-progress TWAP (current part's span elapsed but next
+    /// part not yet started), reverts with `PollTryAtEpoch(nextPartStart, "between parts")`.
+    function test_twap_reverts_with_PollTryAtEpoch_between_parts() public {
+        uint256 startTime = 1_000_000;
+        TWAPOrder.Data memory o = _twapTestBundle(startTime);
+
+        // Sit between part 0 and part 1: part 0's span ends at `t0 + span - 1`, so any
+        // timestamp in `[t0 + span, t0 + frequency)` is between parts.
+        uint256 currentTime = startTime + SPAN + 30; // 30s into the dead time
+        vm.warp(currentTime);
+
+        uint256 expectedNextPartStart = startTime + (((currentTime - startTime) / FREQUENCY) + 1) * FREQUENCY;
+        // For this configuration, that lands exactly at `t0 + frequency` (start of part 1).
+        assertEq(expectedNextPartStart, startTime + FREQUENCY);
+
+        vm.expectRevert(
+            abi.encodeWithSelector(IConditionalOrder.PollTryAtEpoch.selector, expectedNextPartStart, BETWEEN_PARTS)
+        );
+        twap.getTradeableOrder(address(0), address(0), bytes32(0), abi.encode(o), bytes(""));
+    }
+
+    /// @dev Regression: a timestamp inside a valid part still returns the order (no revert).
+    /// Guards against the polling-hint branches accidentally rejecting in-window TWAPs.
+    function test_twap_existing_within_span_behavior_unchanged() public {
+        uint256 startTime = 1_000_000;
+        TWAPOrder.Data memory o = _twapTestBundle(startTime);
+
+        // Sit inside part 0's span (1s after t0; span is 5 minutes, so well within).
+        vm.warp(startTime + 1);
+
+        // Should not revert.
+        GPv2Order.Data memory order =
+            twap.getTradeableOrder(address(0), address(0), bytes32(0), abi.encode(o), bytes(""));
+
+        // Order's validTo must be in the future (basic sanity).
+        assertGt(order.validTo, block.timestamp - 1);
+        assertEq(address(order.sellToken), address(o.sellToken));
+        assertEq(address(order.buyToken), address(o.buyToken));
+        assertEq(order.sellAmount, o.partSellAmount);
     }
 
     // --- Helper functions ---
